@@ -1,0 +1,13 @@
+# Core ML and YOLOv8
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Computer vision and image processing
+opencv-python
+numpy
+pandas
+matplotlib
+scikit-learn
+tqdm
+joblib
