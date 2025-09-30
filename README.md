@@ -42,5 +42,3 @@ Dataset is provided in **YOLO format** for training object detection models (ima
    - Alerts can be via console logs, email, or GUI warning.
 
 
-## Project Architecture
-
