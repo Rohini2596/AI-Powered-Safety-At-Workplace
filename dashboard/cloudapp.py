@@ -10,6 +10,22 @@ import cv2
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import os
+import gdown
+import streamlit as st
+
+MODEL_PATH = "models/yolov8_ppe.pt"
+MODEL_URL = "https://drive.google.com/uc?id=1qLB4ZjijrpNdHcphQftVudm8y4SOZDoL"
+
+@st.cache_resource
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        os.makedirs("models", exist_ok=True)
+        with st.spinner("⬇️ Downloading PPE model (first run only)..."):
+            gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+    return MODEL_PATH
+
+MODEL_PATH = download_model()
 
 # ===================== PAGE CONFIG =====================
 st.set_page_config(
