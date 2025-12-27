@@ -1,15 +1,14 @@
-# Core ML and YOLOv8
-ultralytics>=8.0.0
-torch>=2.0.0
-torchvision>=0.15.0
-streamlit
+streamlit>=1.30.0
 
-# Computer vision and image processing
-opencv-python
-numpy
-pandas
-matplotlib
-scikit-learn
-tqdm
-joblib
-plotly
+torch>=2.0.0
+ultralytics>=8.0.0
+
+opencv-python-headless>=4.8.0
+
+numpy>=1.23.0
+pandas>=1.5.0
+plotly>=5.15.0
+
+gdown>=4.7.1
+psutil>=5.9.0
+pynvml>=11.5.0
