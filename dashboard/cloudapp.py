@@ -164,9 +164,7 @@ tracker = SimpleTracker()
 
 # ===================== DETECTION LOOP =====================
 if st.session_state.running:
-
-    detector = PPEDetector(conf=confidence)
-
+    detector = PPEDetector(model_path=MODEL_PATH, conf=confidence)
     if video_mode == "Webcam (Local only)":
         cap = cv2.VideoCapture(0)
     else:
