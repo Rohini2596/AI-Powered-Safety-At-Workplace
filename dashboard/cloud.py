@@ -1,125 +1,126 @@
-import os, time, tempfile, threading
-from collections import deque
-from datetime import datetime
-
-import streamlit as st
+import time
+import av
 import cv2
-import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-import gdown
+import streamlit as st
 
-# ================= CONFIG =================
+from collections import deque
+from ultralytics import YOLO
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
+
+# ===================== CONFIG =====================
+st.set_page_config(
+    page_title="PPE Real-Time Monitoring",
+    page_icon="🦺",
+    layout="wide"
+)
+
 MODEL_PATH = "models/yolov8_ppe.pt"
-MODEL_URL = "https://drive.google.com/uc?id=1qLB4ZjijrpNdHcphQftVudm8y4SOZDoL"
 
-VIOLATION_CLASSES = {"NO-Hardhat", "NO-Mask", "NO-Safety Vest"}
-DETECT_EVERY = 5
+VIOLATION_CLASSES = {
+    "NO-Hardhat",
+    "NO-Mask",
+    "NO-Safety Vest"
+}
 
-# ================= MODEL =================
+# ===================== LOAD MODEL =====================
 @st.cache_resource
-def download_model():
-    os.makedirs("models", exist_ok=True)
-    if not os.path.exists(MODEL_PATH):
-        gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
-    return MODEL_PATH
+def load_model():
+    return YOLO(MODEL_PATH)
 
-MODEL_PATH = download_model()
+model = load_model()
 
-from detect import PPEDetector
+# ===================== SESSION STATE =====================
+if "fps_hist" not in st.session_state:
+    st.session_state.fps_hist = deque(maxlen=100)
+    st.session_state.time_hist = deque(maxlen=100)
+    st.session_state.violations = 0
+    st.session_state.last_update = time.time()
 
-# ================= STATE =================
-if "results" not in st.session_state:
-    st.session_state.results = []
-    st.session_state.fps_hist = []
-    st.session_state.time_hist = []
-    st.session_state.processing_done = False
+# ===================== UI =====================
+st.markdown("## 🦺 Real-Time PPE Compliance Monitoring")
+st.caption("Streamlit + WebRTC • True real-time detection • Accurate FPS")
 
-# ================= UI =================
-st.set_page_config("PPE Monitoring", "🦺", layout="wide")
-st.title("🦺 PPE Compliance Monitoring (Media-Player Mode)")
-st.caption("Video playback without frame rendering • Background detection")
-
-uploaded_video = st.file_uploader("Upload video", ["mp4", "avi"])
-
-start = st.button("▶ Start Analysis")
+m1, m2 = st.columns(2)
+fps_metric = m1.metric("FPS", "0.0")
+vio_metric = m2.metric("Violations", "0")
 
 video_col, chart_col = st.columns([2, 1])
+chart_placeholder = chart_col.empty()
 
-# ================= BACKGROUND PROCESS =================
-def process_video(video_path):
-    detector = PPEDetector(MODEL_PATH, 0.5)
-    cap = cv2.VideoCapture(video_path)
+# ===================== VIDEO PROCESSOR =====================
+class PPEProcessor(VideoTransformerBase):
+    def __init__(self):
+        self.prev_time = time.time()
 
-    prev = time.time()
+    def transform(self, frame: av.VideoFrame) -> np.ndarray:
+        img = frame.to_ndarray(format="bgr24")
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        results = model(img, conf=0.5, verbose=False)[0]
 
-        frame_id = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            label = model.names[cls_id]
 
-        if frame_id % DETECT_EVERY == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            _, detections = detector.detect(rgb)
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-            for d in detections:
-                if d["class_name"] in VIOLATION_CLASSES:
-                    st.session_state.results.append([
-                        datetime.now().strftime("%H:%M:%S"),
-                        d["class_name"],
-                        d["confidence"]
-                    ])
+            color = (0, 255, 0)
+            if label in VIOLATION_CLASSES:
+                color = (0, 0, 255)
+                st.session_state.violations += 1
 
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                img,
+                f"{label} {conf:.2f}",
+                (x1, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2
+            )
+
+        # FPS calculation
         now = time.time()
-        fps = 1 / max(now - prev, 1e-6)
-        prev = now
+        fps = 1 / max(now - self.prev_time, 1e-6)
+        self.prev_time = now
 
         st.session_state.fps_hist.append(fps)
-        st.session_state.time_hist.append(frame_id)
+        st.session_state.time_hist.append(time.strftime("%H:%M:%S"))
 
-    cap.release()
-    st.session_state.processing_done = True
+        return img
 
-# ================= MAIN =================
-if uploaded_video and start:
-
-    tmp = tempfile.NamedTemporaryFile(delete=False)
-    tmp.write(uploaded_video.read())
-    video_path = tmp.name
-
-    # ▶ Play video normally
-    video_col.video(video_path)
-
-    # 🧠 Run detection in background
-    thread = threading.Thread(target=process_video, args=(video_path,))
-    thread.start()
-
-    # 📊 Live chart
-    while not st.session_state.processing_done:
-        if st.session_state.fps_hist:
-            fig = go.Figure(go.Scatter(
-                x=st.session_state.time_hist,
-                y=st.session_state.fps_hist,
-                mode="lines"
-            ))
-            fig.update_layout(
-                title="Processing FPS (Background)",
-                height=300
-            )
-            chart_col.plotly_chart(fig, use_container_width=True)
-
-        time.sleep(0.5)
-
-    st.success("✅ Analysis completed")
-
-# ================= LOG =================
-if st.session_state.results:
-    st.markdown("### 🚨 Violations Detected")
-    st.dataframe(
-        pd.DataFrame(
-            st.session_state.results,
-            columns=["Time", "Class", "Confidence"]
-        ),
-        use_container_width=True
+# ===================== WEBRTC =====================
+with video_col:
+    webrtc_ctx = webrtc_streamer(
+        key="ppe-realtime",
+        mode=WebRtcMode.SENDRECV,
+        video_processor_factory=PPEProcessor,
+        media_stream_constraints={
+            "video": True,
+            "audio": False
+        },
+        async_processing=True
     )
+
+# ===================== LIVE UI UPDATE =====================
+if webrtc_ctx.state.playing and st.session_state.fps_hist:
+    avg_fps = sum(st.session_state.fps_hist) / len(st.session_state.fps_hist)
+    fps_metric.metric("FPS", f"{avg_fps:.2f}")
+    vio_metric.metric("Violations", st.session_state.violations)
+
+    fig = go.Figure()
+    fig.add_scatter(
+        x=list(st.session_state.time_hist),
+        y=list(st.session_state.fps_hist),
+        mode="lines"
+    )
+    fig.update_layout(
+        title="Live FPS Trend",
+        height=300,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+
+    chart_placeholder.plotly_chart(fig, use_container_width=True)
