@@ -1,0 +1,6 @@
+timestamp,worker_id,violation_type,confidence,file_path
+2025-11-13 18:05:10,101,No Helmet,0.92,frame_001.jpg
+2025-11-13 18:06:45,102,No Vest,0.88,frame_002.jpg
+2025-11-13 18:07:22,103,No Helmet,0.95,frame_003.jpg
+2025-11-13 18:09:10,104,No Gloves,0.89,frame_004.jpg
+2025-11-13 18:12:30,105,No Helmet,0.91,frame_005.jpg
