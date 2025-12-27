@@ -9,186 +9,157 @@ import cv2
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import gdown
 
-from ultralytics import YOLO
+from detect import PPEDetector
 
-# ===================== PAGE CONFIG =====================
-st.set_page_config(
-    page_title="PPE AI Monitoring",
-    page_icon="🦺",
-    layout="wide"
-)
+# ---------------- Config ----------------
+st.set_page_config(page_title="🦺 PPE Monitoring Dashboard", layout="wide")
+st.title("🦺 PPE Compliance Monitoring Dashboard")
+st.markdown("Live PPE detection with FPS trend, violation table, and snapshots")
 
-# ===================== MODEL DOWNLOAD =====================
-MODEL_PATH = "models/yolov8_ppe.pt"
-MODEL_URL = "https://drive.google.com/uc?id=1qLB4ZjijrpNdHcphQftVudm8y4SOZDoL"
+# ---------------- Constants ----------------
+SNAP_DIR = "snapshots"
+os.makedirs(SNAP_DIR, exist_ok=True)
 
-@st.cache_resource
-def load_model():
-    if not os.path.exists(MODEL_PATH):
-        os.makedirs("models", exist_ok=True)
-        with st.spinner("⬇️ Downloading PPE detection model (first run only)..."):
-            gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
-    return YOLO(MODEL_PATH)
-
-model = load_model()
-
-# ===================== CONSTANTS =====================
 VIOLATION_CLASSES = {"NO-Hardhat", "NO-Mask", "NO-Safety Vest"}
+CSV_HEADER = ["timestamp", "worker_id", "class_name", "confidence", "x1", "y1", "x2", "y2", "snapshot"]
 
-# ===================== UI STYLES =====================
-st.markdown("""
-<style>
-.stApp {
-    background: linear-gradient(120deg,#0f2027,#203a43,#2c5364);
-    color: white;
-}
-.block {
-    background: rgba(255,255,255,0.08);
-    padding: 18px;
-    border-radius: 16px;
-}
-</style>
-""", unsafe_allow_html=True)
+# ---------------- Session State ----------------
+if "running" not in st.session_state:
+    st.session_state.running = False
+if "paused" not in st.session_state:
+    st.session_state.paused = False
+if "rows" not in st.session_state:
+    st.session_state.rows = []
+if "download_ready" not in st.session_state:
+    st.session_state.download_ready = False
 
-# ===================== TITLE =====================
-st.markdown("## 🦺 AI-Powered PPE Compliance Monitoring")
-st.caption("Live video • Dynamic analytics • Cloud-ready")
+# ---------------- Controls ----------------
+controls = st.columns(4)
+if controls[0].button("▶ Start"):
+    st.session_state.running = True
+    st.session_state.paused = False
+    st.session_state.rows = []
+    st.session_state.download_ready = False
 
-# ===================== CONTROLS =====================
-top1, top2 = st.columns([3, 1])
+if controls[1].button("⏸ Pause"):
+    st.session_state.paused = True
 
-with top1:
-    uploaded_video = st.file_uploader(
-        "📁 Upload Site / CCTV Video",
-        type=["mp4", "avi"]
-    )
+if controls[2].button("▶ Resume"):
+    st.session_state.paused = False
 
-with top2:
-    start_btn = st.button("▶ Start Detection", use_container_width=True)
+if controls[3].button("⏹ Stop"):
+    st.session_state.running = False
+    st.session_state.paused = False
 
-confidence = st.slider("🎯 Confidence Threshold", 0.1, 1.0, 0.5)
+uploaded_video = st.file_uploader("Upload MP4 / AVI", type=["mp4","avi"])
 
-st.markdown("---")
+# ---------------- Layout ----------------
+left_col, right_col = st.columns([2.5, 1])
+video_ph = left_col.empty()
+kpi_cols = left_col.columns(3)
+kpi_frames, kpi_viol, kpi_status = kpi_cols
 
-# ===================== DASHBOARD LAYOUT =====================
-left, right = st.columns([2.2, 1])
+fps_chart_ph = right_col.empty()
+viol_chart_ph = right_col.empty()
+logs_ph = st.empty()
 
-video_ph = left.empty()
-kpi_ph = right.empty()
-fps_chart_ph = right.empty()
+# ---------------- Stats ----------------
+fps_hist = deque(maxlen=120)
+time_hist = deque(maxlen=120)
+total_frames = 0
+total_violations = 0
 
-st.markdown("### 🚨 Live Violations")
-table_ph = st.empty()
+# ---------------- Detector ----------------
+MODEL_PATH = "models/yolov8_ppe.pt"
+detector = PPEDetector(model_path=MODEL_PATH, conf=0.5)
 
-# ===================== DETECTION =====================
-if start_btn:
+# ---------------- Detection Loop ----------------
+if st.session_state.running:
 
     if not uploaded_video:
-        st.error("❌ Please upload a video first")
+        st.warning("Please upload a video file first.")
         st.stop()
 
-    # Temp file
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    tmp.write(uploaded_video.read())
-    cap = cv2.VideoCapture(tmp.name)
-
-    fps_hist = deque(maxlen=60)
-    frame_hist = deque(maxlen=60)
-    violations = []
-
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    tmp_file.write(uploaded_video.read())
+    cap = cv2.VideoCapture(tmp_file.name)
     prev_time = time.time()
-    frame_id = 0
 
-    while cap.isOpened():
+    while cap.isOpened() and st.session_state.running:
+
+        if st.session_state.paused:
+            time.sleep(0.2)
+            continue
+
         ret, frame = cap.read()
         if not ret:
             break
 
-        frame_id += 1
+        total_frames += 1
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        annotated, detections = detector.detect(rgb)
 
-        results = model.predict(rgb, conf=confidence, verbose=False)
-        annotated = results[0].plot()
-        boxes = results[0].boxes
+        frame_violations = 0
+        for d in detections:
+            if d["class_name"] in VIOLATION_CLASSES:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                snap = f"{SNAP_DIR}/{int(time.time()*1000)}.jpg"
+                cv2.imwrite(snap, cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
 
-        # ---------------- Violations ----------------
-        for box in boxes:
-            cls_name = model.names[int(box.cls[0])]
-            if cls_name in VIOLATION_CLASSES:
-                violations.append([
-                    datetime.now().strftime("%H:%M:%S"),
-                    cls_name,
-                    round(float(box.conf[0]), 2)
+                st.session_state.rows.append([
+                    ts, "P_1", d["class_name"], d["confidence"],
+                    *d["bbox"].values(), snap
                 ])
+                frame_violations += 1
+                total_violations += 1
 
-        # ---------------- FPS ----------------
+        # FPS
         now = time.time()
-        fps = 1 / max(now - prev_time, 1e-6)
+        fps = 1 / max(1e-6, now - prev_time)
         prev_time = now
-
         fps_hist.append(fps)
-        frame_hist.append(frame_id)
+        time_hist.append(datetime.now().strftime("%H:%M:%S"))
 
-        # ================= UI UPDATES =================
+        # Update KPIs
+        kpi_frames.metric("Frames", total_frames)
+        kpi_viol.metric("Violations", total_violations)
+        kpi_status.metric("Status", "RUNNING" if st.session_state.running else "IDLE")
 
-        # 🎥 Video
-        video_ph.image(
-            annotated,
-            channels="RGB",
-            use_container_width=True
-        )
+        # Display video
+        video_ph.image(annotated, channels="RGB", use_container_width=True)
 
-        # 🚨 KPI
-        kpi_ph.markdown(
-            f"""
-            <div class="block">
-                <h3>🚨 Total Violations</h3>
-                <h1>{len(violations)}</h1>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        # Update charts
+        if len(fps_hist) > 1:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=list(time_hist), y=list(fps_hist), mode="lines+markers", name="FPS"))
+            fig.update_layout(title="FPS Trend", height=250, xaxis_title="Time", yaxis_title="FPS")
+            fps_chart_ph.plotly_chart(fig, use_container_width=True)
 
-        # 📊 FPS Chart
-        fig = go.Figure()
-        fig.add_scatter(
-            x=list(frame_hist),
-            y=list(fps_hist),
-            mode="lines",
-            line=dict(width=3)
-        )
-        fig.update_layout(
-            height=260,
-            template="plotly_dark",
-            title="📊 Live FPS Trend",
-            margin=dict(l=20, r=20, t=40, b=20),
-            xaxis_title="Frame",
-            yaxis_title="FPS"
-        )
-        fps_chart_ph.plotly_chart(fig, use_container_width=True)
+            df = pd.DataFrame(st.session_state.rows, columns=CSV_HEADER)
+            dist = df['class_name'].value_counts().reset_index()
+            dist.columns = ['violation_type','count']
+            fig2 = go.Figure(go.Bar(x=dist['violation_type'], y=dist['count'], marker_color='red'))
+            fig2.update_layout(title="Violation Counts", xaxis_title="Type", yaxis_title="Count")
+            viol_chart_ph.plotly_chart(fig2, use_container_width=True)
 
-        # 📋 Table
-        table_ph.dataframe(
-            pd.DataFrame(
-                violations,
-                columns=["Time", "Violation Type", "Confidence"]
-            ).tail(15),
-            use_container_width=True
-        )
+            # Logs
+            logs_ph.dataframe(df.tail(20), use_container_width=True)
+
+            # CSV download
+            if not st.session_state.download_ready:
+                st.session_state.download_ready = True
+                st.download_button(
+                    "📥 Download CSV",
+                    df.to_csv(index=False),
+                    file_name=f"ppe_violations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                )
+
+        time.sleep(0.01)
 
     cap.release()
-    st.success("✅ Detection completed")
+    st.session_state.running = False
+    st.success("✅ Detection stopped")
 
-    # ===================== DOWNLOAD =====================
-    if violations:
-        df = pd.DataFrame(
-            violations,
-            columns=["Time", "Violation Type", "Confidence"]
-        )
-        st.download_button(
-            "📥 Download Violations CSV",
-            df.to_csv(index=False),
-            "ppe_violations.csv"
-        )
+else:
+    st.info("Upload a video and click ▶ Start to begin detection.")
