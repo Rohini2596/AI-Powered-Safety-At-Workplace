@@ -2,6 +2,7 @@
 ultralytics>=8.0.0
 torch>=2.0.0
 torchvision>=0.15.0
+streamlit
 
 # Computer vision and image processing
 opencv-python
@@ -11,3 +12,4 @@ matplotlib
 scikit-learn
 tqdm
 joblib
+plotly
