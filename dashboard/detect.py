@@ -2,7 +2,7 @@ import cv2
 from ultralytics import YOLO
 
 class PPEDetector:
-    def __init__(self, model_path=r"C:\WE\Infosys\models\yolov8_ppe.pt", conf=0.5):
+    def __init__(self, model_path, conf=0.5):
         self.model = YOLO(model_path)
         self.conf = conf
         self.class_names = [
