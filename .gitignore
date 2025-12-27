@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Node modules
 node_modules/
 
@@ -19,3 +20,6 @@ Thumbs.db
 # Build output (if any)
 dist/
 build/
+=======
+
+>>>>>>> 8b6df723612e39b4c80af373953d7aadfcc1ef25

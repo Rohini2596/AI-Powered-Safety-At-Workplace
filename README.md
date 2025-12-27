@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SafetyEye – AI-Powered Workplace Occupancy & Safety Monitor
 
 ## Project Overview
@@ -42,3 +43,6 @@ Dataset is provided in **YOLO format** for training object detection models (ima
    - Alerts can be via console logs, email, or GUI warning.
 
 
+=======
+# AI-Powered-Safety-At-Workplace
+>>>>>>> 8b6df723612e39b4c80af373953d7aadfcc1ef25
