@@ -6,3 +6,5 @@ gdown
 numpy
 pandas
 plotly
+streamlit-webrtc
+av
